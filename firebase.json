@@ -1,0 +1,16 @@
+{
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**",
+      "**/*.py",
+      "**/*.zip",
+      "**/*.exe",
+      "**/*.log",
+      "temp_unzip/**",
+      "usquare_project/**"
+    ]
+  }
+}

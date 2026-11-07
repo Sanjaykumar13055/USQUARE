@@ -1,3 +1,18 @@
-.DS_Store
+# Large binaries and archives
+*.exe
+firebase.exe
+*.zip
+USQUARE_project.zip
+
+# Python scratch and migration scripts
+*.py
+__pycache__/
+
+# Temporary folders
+temp_unzip/
+usquare_project/
+.firebase/
+.firebaserc
 node_modules/
+.DS_Store
 *.log

@@ -1,5 +1,21 @@
 const { useState, useEffect, useMemo } = React;
 
+// Initialize Firebase
+const firebaseConfig = {
+  apiKey: "AIzaSyDCHN0rR7dFBRm8wp1X-RUYN36pV5Jolps",
+  authDomain: "usquare-59fc2.firebaseapp.com",
+  projectId: "usquare-59fc2",
+  storageBucket: "usquare-59fc2.firebasestorage.app",
+  messagingSenderId: "761030377337",
+  appId: "1:761030377337:web:7678b92828f5ba3bcd39a8",
+  measurementId: "G-FKC6F9FWEK"
+};
+
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+const db = firebase.firestore();
+
 // Custom SVG Icon Components
 const SearchIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -180,7 +196,6 @@ function CustomRoyalDropdown({ options, value, onChange, placeholder = "Select o
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
   return (
     <div className={`royal-dropdown-container ${className}`} ref={dropdownRef}>
       <button 
@@ -366,6 +381,14 @@ function App() {
   const [theme, setTheme] = useState('light');
   
   // Data state
+  const [productList, setProductList] = useState(() => {
+    try {
+      const saved = localStorage.getItem('usquare_products');
+      return saved ? JSON.parse(saved) : PRODUCTS;
+    } catch {
+      return PRODUCTS;
+    }
+  });
   const [cart, setCart] = useState([]);
   const [wishlist, setWishlist] = useState([]);
   const [toasts, setToasts] = useState([]);
@@ -374,9 +397,11 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [sortBy, setSortBy] = useState('popular');
-  const [maxPrice, setMaxPrice] = useState(200);
+  const [maxPrice, setMaxPrice] = useState(15000);
   
   // Modal state
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(() => localStorage.getItem('usquare_logged_in') === 'true');
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isWishlistOpen, setIsWishlistOpen] = useState(false);
   const [activeProduct, setActiveProduct] = useState(null);
@@ -394,6 +419,24 @@ function App() {
   // Promo code & Checkout form
   const [promoInput, setPromoInput] = useState('');
   const [discountRate, setDiscountRate] = useState(0);
+
+  const [orders, setOrders] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('usquare_orders')) || []; }
+    catch { return []; }
+  });
+  const [promoCodes, setPromoCodes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('usquare_promos')) || { 'EID2026': 0.15, 'WELCOME10': 0.10 }; }
+    catch { return { 'EID2026': 0.15, 'WELCOME10': 0.10 }; }
+  });
+  const [bookings, setBookings] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('usquare_bookings')) || []; }
+    catch { return []; }
+  });
+  const [storeSettings, setStoreSettings] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('usquare_settings')) || { shippingFee: 50, freeShippingThreshold: 1000 }; }
+    catch { return { shippingFee: 50, freeShippingThreshold: 1000 }; }
+  });
+
   const [shippingInfo, setShippingInfo] = useState({
     fullName: '',
     email: '',
@@ -418,6 +461,15 @@ function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  // Scroll Lock for Modals
+  useEffect(() => {
+    if (isAdminOpen || isCheckoutOpen || isWishlistOpen || activeProduct) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'auto';
+    }
+  }, [isAdminOpen, isCheckoutOpen, isWishlistOpen, activeProduct]);
 
   // Scroll & Entrance Animations Observer
   useEffect(() => {
@@ -458,6 +510,9 @@ function App() {
       showToast('Please fill in all required booking details');
       return;
     }
+    const newBooking = { ...bookingForm, id: Date.now(), status: 'Pending', submitDate: new Date().toLocaleDateString() };
+    db.collection('bookings').add({ ...newBooking, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    
     setBookingSubmitted(true);
     showToast(`Booking request sent to ${bookingDesigner ? bookingDesigner.name : 'Designer'}!`);
   };
@@ -478,7 +533,7 @@ function App() {
 
   // Advanced Multi-Field Filter Matching
   const filteredProducts = useMemo(() => {
-    return PRODUCTS.filter(product => {
+    return productList.filter(product => {
       const matchesCategory = selectedCategory === 'All' || product.category === selectedCategory;
       
       let matchesSearch = true;
@@ -508,7 +563,7 @@ function App() {
   const searchMatches = useMemo(() => {
     if (!searchQuery.trim()) return [];
     const q = searchQuery.toLowerCase().trim();
-    return PRODUCTS.filter(p => 
+    return productList.filter(p => 
       p.name.toLowerCase().includes(q) || 
       p.category.toLowerCase().includes(q) || 
       p.description.toLowerCase().includes(q) || 
@@ -570,14 +625,14 @@ function App() {
   // Calculations
   const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const discountAmount = subtotal * discountRate;
-  const shippingFee = subtotal > 100 || subtotal === 0 ? 0 : 9.99;
+  const shippingFee = subtotal >= storeSettings.freeShippingThreshold || subtotal === 0 ? 0 : storeSettings.shippingFee;
   const grandTotal = Math.max(0, subtotal - discountAmount + shippingFee);
 
   const applyPromo = () => {
     const code = promoInput.trim().toUpperCase();
-    if (PROMO_CODES[code]) {
-      setDiscountRate(PROMO_CODES[code]);
-      showToast(`Promo code applied! ${PROMO_CODES[code] * 100}% OFF`);
+    if (promoCodes[code]) {
+      setDiscountRate(promoCodes[code]);
+      showToast(`Promo code applied! ${promoCodes[code] * 100}% OFF`);
     } else {
       showToast("Invalid Promo Code. Try EID2026 or WELCOME10");
     }
@@ -622,8 +677,362 @@ function App() {
     setCart([]);
   };
 
+  // Admin Dashboard State
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [inwardOutwardProduct, setInwardOutwardProduct] = useState(null);
+  const [stockChangeQty, setStockChangeQty] = useState('');
+
+  // Admin Dashboard Component
+  const AdminDashboard = () => {
+    const handleLogin = (e) => {
+      e.preventDefault();
+      if (loginUsername === 'admin' && loginPassword === 'admin') {
+        setIsLoggedIn(true);
+        localStorage.setItem('usquare_logged_in', 'true');
+        showToast('Successfully logged in');
+      } else {
+        showToast('Invalid credentials');
+      }
+    };
+
+    const handleLogout = () => {
+      setIsLoggedIn(false);
+      localStorage.removeItem('usquare_logged_in');
+      setIsAdminOpen(false);
+      showToast('Logged out');
+    };
+
+    const handleSaveProduct = (e) => {
+      e.preventDefault();
+      const updatedList = [...productList];
+      
+      // Parse numbers and arrays
+      const productToSave = {
+        ...editingProduct,
+        price: parseFloat(editingProduct.price) || 0,
+        originalPrice: editingProduct.originalPrice ? parseFloat(editingProduct.originalPrice) : null,
+        stock: parseInt(editingProduct.stock) || 0,
+        colors: typeof editingProduct.colors === 'string' ? editingProduct.colors.split(',').map(c => c.trim()) : editingProduct.colors,
+        sizes: typeof editingProduct.sizes === 'string' ? editingProduct.sizes.split(',').map(s => s.trim()) : editingProduct.sizes,
+        badges: typeof editingProduct.badges === 'string' ? editingProduct.badges.split(',').map(b => b.trim()) : editingProduct.badges,
+      };
+
+      if (productToSave.id && productList.some(p => p.id === productToSave.id)) {
+        db.collection('products').doc(productToSave.id).set(productToSave);
+        showToast('Product updated successfully');
+      } else {
+        productToSave.id = productToSave.id || 'P' + Date.now();
+        db.collection('products').doc(productToSave.id).set(productToSave);
+        showToast('Product added successfully');
+      }
+      setEditingProduct(null);
+    };
+
+    const handleDeleteProduct = (id) => {
+      if (confirm('Are you sure you want to delete this product?')) {
+        db.collection('products').doc(id).delete();
+        showToast('Product deleted');
+      }
+    };
+
+    const handleStockUpdate = (e, type) => {
+      e.preventDefault();
+      const qty = parseInt(stockChangeQty);
+      if (!qty || qty <= 0) return showToast('Enter a valid quantity');
+      
+      const updatedList = [...productList];
+      const index = updatedList.findIndex(p => p.id === inwardOutwardProduct.id);
+      
+      if (type === 'outward' && updatedList[index].stock < qty) {
+        return showToast('Not enough stock for outward movement');
+      }
+      
+      const newStock = updatedList[index].stock + (type === 'inward' ? qty : -qty);
+      db.collection('products').doc(inwardOutwardProduct.id).update({ stock: newStock });
+      
+      showToast(`Stock updated: ${type} ${qty}`);
+      setInwardOutwardProduct(null);
+      setStockChangeQty('');
+    };
+
+    if (!isLoggedIn) {
+      return (
+        <div className="admin-overlay anim-visible">
+          <div className="admin-login-container">
+            <div className="admin-login-card admin-card">
+              <h2 className="admin-title" style={{marginBottom: '10px'}}>Admin Access</h2>
+              <p style={{color: 'var(--text-secondary)', marginBottom: '30px'}}>Please login to manage store inventory</p>
+              <form onSubmit={handleLogin}>
+                <div className="admin-form-group" style={{textAlign: 'left'}}>
+                  <label>Username</label>
+                  <input type="text" value={loginUsername} onChange={e => setLoginUsername(e.target.value)} required />
+                </div>
+                <div className="admin-form-group" style={{textAlign: 'left'}}>
+                  <label>Password</label>
+                  <input type="password" value={loginPassword} onChange={e => setLoginPassword(e.target.value)} required />
+                </div>
+                <div style={{display: 'flex', gap: '10px', marginTop: '20px'}}>
+                  <button type="submit" className="admin-btn" style={{flex: 1}}>Login</button>
+                  <button type="button" className="admin-btn-outline" style={{flex: 1}} onClick={() => setIsAdminOpen(false)}>Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="admin-overlay anim-visible">
+        <div className="admin-sidebar">
+          <div className="admin-sidebar-logo">U SQUARE<br/><span style={{fontSize:'0.8rem', letterSpacing:'2px'}}>ADMIN</span></div>
+          <button className={`admin-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>
+            Overview
+          </button>
+          <button className={`admin-nav-item ${activeTab === 'orders' ? 'active' : ''}`} onClick={() => setActiveTab('orders')}>
+            Orders
+          </button>
+          <button className={`admin-nav-item ${activeTab === 'products' ? 'active' : ''}`} onClick={() => setActiveTab('products')}>
+            Product Management
+          </button>
+          <button className={`admin-nav-item ${activeTab === 'stock' ? 'active' : ''}`} onClick={() => setActiveTab('stock')}>
+            Stock Maintenance
+          </button>
+          <button className={`admin-nav-item ${activeTab === 'promos' ? 'active' : ''}`} onClick={() => setActiveTab('promos')}>
+            Promotions
+          </button>
+          <button className={`admin-nav-item ${activeTab === 'bookings' ? 'active' : ''}`} onClick={() => setActiveTab('bookings')}>
+            Mehndi Bookings
+          </button>
+          <button className={`admin-nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => setActiveTab('settings')}>
+            Settings
+          </button>
+          <div style={{marginTop: 'auto'}}>
+            <button className="admin-nav-item" onClick={() => setIsAdminOpen(false)} style={{width:'100%', justifyContent:'center', marginBottom: '10px', border: '1px solid rgba(255,255,255,0.2)'}}>
+              Return to Store
+            </button>
+            <button className="admin-nav-item" onClick={handleLogout} style={{width:'100%', justifyContent:'center', color: '#ffb3b3'}}>
+              Logout
+            </button>
+          </div>
+        </div>
+
+        <div className="admin-main">
+          {activeTab === 'dashboard' && (
+            <div>
+              <div className="admin-header">
+                <h2 className="admin-title">Dashboard Overview</h2>
+              </div>
+              <div className="admin-stats-grid">
+                <div className="admin-stat-box">
+                  <div className="admin-stat-value">{productList.length}</div>
+                  <div className="admin-stat-label">Total Products</div>
+                </div>
+                <div className="admin-stat-box">
+                  <div className="admin-stat-value">₹{productList.reduce((sum, p) => sum + (p.price * (p.stock||0)), 0).toLocaleString('en-IN')}</div>
+                  <div className="admin-stat-label">Total Inventory Value</div>
+                </div>
+                <div className="admin-stat-box">
+                  <div className="admin-stat-value">{productList.filter(p => (p.stock||0) < 5).length}</div>
+                  <div className="admin-stat-label">Low Stock Alerts</div>
+                </div>
+                <div className="admin-stat-box">
+                  <div className="admin-stat-value">{orders.length}</div>
+                  <div className="admin-stat-label">Total Orders</div>
+                </div>
+              </div>
+              
+              <div className="admin-charts-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '20px' }}>
+                <div className="admin-card">
+                   <h3 style={{marginBottom: '15px'}}>Sales Activity</h3>
+                   <div className="fake-chart-container" style={{height: '150px', display: 'flex', alignItems: 'flex-end', gap: '10px', paddingBottom: '20px', borderBottom: '1px solid rgba(255,255,255,0.1)'}}>
+                     <div className="chart-bar" style={{flex: 1, backgroundColor: 'var(--gold-primary)', height: '40%', borderRadius: '4px 4px 0 0'}}></div>
+                     <div className="chart-bar" style={{flex: 1, backgroundColor: 'var(--gold-primary)', height: '70%', borderRadius: '4px 4px 0 0'}}></div>
+                     <div className="chart-bar" style={{flex: 1, backgroundColor: 'var(--gold-primary)', height: '50%', borderRadius: '4px 4px 0 0'}}></div>
+                     <div className="chart-bar" style={{flex: 1, backgroundColor: 'var(--gold-primary)', height: '90%', borderRadius: '4px 4px 0 0'}}></div>
+                     <div className="chart-bar" style={{flex: 1, backgroundColor: 'var(--gold-primary)', height: '60%', borderRadius: '4px 4px 0 0'}}></div>
+                   </div>
+                </div>
+                <div className="admin-card">
+                   <h3 style={{marginBottom: '15px'}}>Recent Orders</h3>
+                   {orders.slice(0, 4).map(o => (
+                     <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.05)', padding: '10px 0'}}>
+                       <span>#{o.id}</span>
+                       <span style={{color: 'var(--gold-primary)'}}>₹{o.total.toFixed(2)}</span>
+                       <span className={`status-badge ${o.status.toLowerCase()}`}>{o.status}</span>
+                     </div>
+                   ))}
+                   {orders.length === 0 && <div style={{color: 'var(--text-secondary)'}}>No orders yet.</div>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'products' && (
+            <div>
+              <div className="admin-header">
+                <h2 className="admin-title">Product Management</h2>
+                <button className="admin-btn" onClick={() => setEditingProduct({
+                  name: '', category: 'Hijabs', price: '', image: './images/placeholder.jpg', stock: 10, colors: '', sizes: '', description: '', tags: '', badges: ''
+                })}>+ Add New Product</button>
+              </div>
+              
+              {editingProduct ? (
+                <div className="admin-card">
+                  <h3 style={{marginBottom: '20px'}}>{editingProduct.id ? 'Edit Product' : 'Add New Product'}</h3>
+                  <form onSubmit={handleSaveProduct} style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px'}}>
+                    <div className="admin-form-group">
+                      <label>Product Name</label>
+                      <input type="text" value={editingProduct.name} onChange={e => setEditingProduct({...editingProduct, name: e.target.value})} required />
+                    </div>
+                    <div className="admin-form-group">
+                      <label>Category</label>
+                      <select value={editingProduct.category} onChange={e => setEditingProduct({...editingProduct, category: e.target.value})}>
+                        <option>Hijabs</option>
+                        <option>Modest Wear</option>
+                        <option>Accessories</option>
+                        <option>Organic Mehendi</option>
+                        <option>Bridal</option>
+                      </select>
+                    </div>
+                    <div className="admin-form-group">
+                      <label>Price (₹)</label>
+                      <input type="number" step="0.01" value={editingProduct.price} onChange={e => setEditingProduct({...editingProduct, price: e.target.value})} required />
+                    </div>
+                    <div className="admin-form-group">
+                      <label>Original Price (₹) (Optional)</label>
+                      <input type="number" step="0.01" value={editingProduct.originalPrice || ''} onChange={e => setEditingProduct({...editingProduct, originalPrice: e.target.value})} />
+                    </div>
+                    <div className="admin-form-group">
+                      <label>Stock Quantity</label>
+                      <input type="number" value={editingProduct.stock} onChange={e => setEditingProduct({...editingProduct, stock: e.target.value})} required />
+                    </div>
+                    <div className="admin-form-group">
+                      <label>Image URL</label>
+                      <input type="text" value={editingProduct.image} onChange={e => setEditingProduct({...editingProduct, image: e.target.value})} required />
+                    </div>
+                    <div className="admin-form-group" style={{gridColumn: '1 / -1'}}>
+                      <label>Description</label>
+                      <textarea rows="3" value={editingProduct.description} onChange={e => setEditingProduct({...editingProduct, description: e.target.value})} required></textarea>
+                    </div>
+                    <div className="admin-form-group">
+                      <label>Colors (comma separated)</label>
+                      <input type="text" value={Array.isArray(editingProduct.colors) ? editingProduct.colors.join(', ') : (editingProduct.colors || '')} onChange={e => setEditingProduct({...editingProduct, colors: e.target.value})} />
+                    </div>
+                    <div className="admin-form-group">
+                      <label>Sizes (comma separated)</label>
+                      <input type="text" value={Array.isArray(editingProduct.sizes) ? editingProduct.sizes.join(', ') : (editingProduct.sizes || '')} onChange={e => setEditingProduct({...editingProduct, sizes: e.target.value})} />
+                    </div>
+                    <div className="admin-form-group">
+                      <label>Tags (comma separated)</label>
+                      <input type="text" value={Array.isArray(editingProduct.tags) ? editingProduct.tags.join(', ') : (editingProduct.tags || '')} onChange={e => setEditingProduct({...editingProduct, tags: e.target.value})} />
+                    </div>
+                    <div className="admin-form-group">
+                      <label>Badges (comma separated)</label>
+                      <input type="text" value={Array.isArray(editingProduct.badges) ? editingProduct.badges.join(', ') : (editingProduct.badges || '')} onChange={e => setEditingProduct({...editingProduct, badges: e.target.value})} />
+                    </div>
+                    
+                    <div style={{gridColumn: '1 / -1', display: 'flex', gap: '15px', marginTop: '10px'}}>
+                      <button type="submit" className="admin-btn">Save Product</button>
+                      <button type="button" className="admin-btn-outline" onClick={() => setEditingProduct(null)}>Cancel</button>
+                    </div>
+                  </form>
+                </div>
+              ) : (
+                <div className="admin-card" style={{padding: 0, overflow: 'hidden'}}>
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Image</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Price</th>
+                        <th>Stock</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {productList.map(p => (
+                        <tr key={p.id}>
+                          <td><img src={p.image} alt={p.name} style={{width:'40px', height:'40px', objectFit:'cover', borderRadius:'4px'}}/></td>
+                          <td style={{fontWeight: 500}}>{p.name}</td>
+                          <td>{p.category}</td>
+                          <td>₹{Number(p.price).toFixed(2)}</td>
+                          <td>
+                            <span style={{
+                              padding: '4px 8px', 
+                              borderRadius: '4px', 
+                              fontSize: '0.8rem',
+                              background: (p.stock||0) < 5 ? '#ffe6e6' : 'var(--emerald-subtle)',
+                              color: (p.stock||0) < 5 ? '#cc0000' : 'var(--emerald-primary)'
+                            }}>{p.stock || 0}</span>
+                          </td>
+                          <td>
+                            <div style={{display: 'flex', gap: '10px'}}>
+                              <button className="admin-btn-outline" style={{padding: '4px 10px', fontSize: '0.8rem'}} onClick={() => setEditingProduct(p)}>Edit</button>
+                              <button className="admin-btn-danger" style={{padding: '4px 10px', fontSize: '0.8rem'}} onClick={() => handleDeleteProduct(p.id)}>Delete</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'stock' && (
+            <div>
+              <div className="admin-header">
+                <h2 className="admin-title">Stock Maintenance</h2>
+              </div>
+              
+              <div className="admin-card">
+                <h3 style={{marginBottom: '20px'}}>Inward / Outward Entry</h3>
+                <form style={{display: 'grid', gridTemplateColumns: '1fr', gap: '20px', maxWidth: '500px'}}>
+                  <div className="admin-form-group">
+                    <label>Select Product</label>
+                    <select 
+                      value={inwardOutwardProduct ? inwardOutwardProduct.id : ''} 
+                      onChange={e => setInwardOutwardProduct(productList.find(p => p.id === e.target.value))}
+                    >
+                      <option value="">-- Choose Product --</option>
+                      {productList.map(p => (
+                        <option key={p.id} value={p.id}>{p.name} (Current Stock: {p.stock || 0})</option>
+                      ))}
+                    </select>
+                  </div>
+                  
+                  {inwardOutwardProduct && (
+                    <>
+                      <div className="admin-form-group">
+                        <label>Quantity</label>
+                        <input type="number" min="1" value={stockChangeQty} onChange={e => setStockChangeQty(e.target.value)} placeholder="Enter quantity..." />
+                      </div>
+                      
+                      <div style={{display: 'flex', gap: '15px'}}>
+                        <button type="button" className="admin-btn" style={{flex: 1, background: 'var(--emerald-primary)'}} onClick={(e) => handleStockUpdate(e, 'inward')}>+ Inward (Add)</button>
+                        <button type="button" className="admin-btn-outline" style={{flex: 1, color: '#dc3545', borderColor: '#dc3545'}} onClick={(e) => handleStockUpdate(e, 'outward')}>- Outward (Remove)</button>
+                      </div>
+                    </>
+                  )}
+                </form>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div>
+      {/* Admin Dashboard */}
+      {isAdminOpen && AdminDashboard()}
       {/* Interactive Custom Animated Cursor */}
       <div 
         className={`custom-cursor-dot ${isCursorHovered ? 'cursor-hover' : ''} ${isCursorClicked ? 'cursor-clicked' : ''}`}
@@ -714,7 +1123,7 @@ function App() {
                         <div className="search-dropdown-title">{product.name}</div>
                         <div className="search-dropdown-meta">{product.category} {product.colors && `• ${product.colors[0]}`}</div>
                       </div>
-                      <div className="search-dropdown-price">${product.price.toFixed(2)}</div>
+                      <div className="search-dropdown-price">₹{product.price.toFixed(2)}</div>
                     </div>
                   ))
                 )}
@@ -731,6 +1140,10 @@ function App() {
             <button className="icon-btn" onClick={() => setIsWishlistOpen(true)} title="Wishlist">
               <HeartIcon filled={wishlist.length > 0} />
               {wishlist.length > 0 && <span className="badge-count">{wishlist.length}</span>}
+            </button>
+
+            <button className="icon-btn" onClick={() => setIsAdminOpen(true)} title="Admin Dashboard">
+              <UserIcon />
             </button>
 
             <button className="icon-btn" onClick={() => setIsCartOpen(true)} title="Shopping Cart">
@@ -775,7 +1188,7 @@ function App() {
                 <span className="text-gold" style={{ fontSize: '0.8rem', fontWeight: 600, letterSpacing: '0.05em' }}>FEATURED FLAGSHIP</span>
                 <h3 style={{ fontSize: '1.2rem', color: '#FFF' }}>Luxury Cotton Shimmer Hijab</h3>
               </div>
-              <button className="btn-primary" style={{ padding: '8px 16px', fontSize: '0.85rem' }} onClick={() => openProductModal(PRODUCTS[0])}>
+              <button className="btn-primary" style={{ padding: '8px 16px', fontSize: '0.85rem' }} onClick={() => openProductModal(productList[0])}>
                 View Product
               </button>
             </div>
@@ -791,11 +1204,12 @@ function App() {
           </div>
 
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-            <label style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>Max Price: <strong>${maxPrice}</strong></label>
+            <label style={{ fontSize: '0.88rem', color: 'var(--text-secondary)' }}>Max Price: <strong>₹{maxPrice}</strong></label>
             <input 
               type="range" 
-              min="10" 
-              max="200" 
+              min="500" 
+              max="15000" 
+              step="500"
               value={maxPrice} 
               onChange={(e) => setMaxPrice(Number(e.target.value))}
               style={{ accentColor: 'var(--gold-primary)' }}
@@ -874,8 +1288,8 @@ function App() {
 
                   <div className="product-footer">
                     <div className="product-price">
-                      <span className="current-price">${product.price.toFixed(2)}</span>
-                      {product.originalPrice && <span className="original-price">${product.originalPrice.toFixed(2)}</span>}
+                      <span className="current-price">₹{product.price.toFixed(2)}</span>
+                      {product.originalPrice && <span className="original-price">₹{product.originalPrice.toFixed(2)}</span>}
                     </div>
 
                     <button className="add-cart-btn" onClick={() => addToCart(product)}>
@@ -1290,7 +1704,7 @@ function App() {
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
                     {item.color} {item.size && `• Size: ${item.size}`}
                   </div>
-                  <div className="cart-item-price">${(item.price * item.quantity).toFixed(2)}</div>
+                  <div className="cart-item-price">₹{(item.price * item.quantity).toFixed(2)}</div>
                   
                   <div className="quantity-controls">
                     <button className="qty-btn" onClick={() => updateCartQty(index, -1)}>-</button>
@@ -1320,21 +1734,21 @@ function App() {
             <div className="price-summary">
               <div className="summary-row">
                 <span>Subtotal</span>
-                <span>${subtotal.toFixed(2)}</span>
+                <span>₹{subtotal.toFixed(2)}</span>
               </div>
               {discountRate > 0 && (
                 <div className="summary-row" style={{ color: 'var(--text-gold)' }}>
                   <span>Discount ({(discountRate * 100)}%)</span>
-                  <span>-${discountAmount.toFixed(2)}</span>
+                  <span>-₹{discountAmount.toFixed(2)}</span>
                 </div>
               )}
               <div className="summary-row">
                 <span>Shipping</span>
-                <span>{shippingFee === 0 ? 'FREE' : `$${shippingFee.toFixed(2)}`}</span>
+                <span>{shippingFee === 0 ? 'FREE' : `₹${shippingFee.toFixed(2)}`}</span>
               </div>
               <div className="summary-row total">
                 <span>Total</span>
-                <span>${grandTotal.toFixed(2)}</span>
+                <span>₹{grandTotal.toFixed(2)}</span>
               </div>
             </div>
 
@@ -1358,12 +1772,12 @@ function App() {
             <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '40px 0' }}>No items saved yet.</p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              {PRODUCTS.filter(p => wishlist.includes(p.id)).map(product => (
+              {productList.filter(p => wishlist.includes(p.id)).map(product => (
                 <div key={product.id} style={{ display: 'flex', gap: '16px', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
                   <img src={product.image} style={{ width: '60px', height: '60px', borderRadius: '8px', objectFit: 'cover' }} />
                   <div style={{ flex: 1 }}>
                     <h4 style={{ fontSize: '1rem' }}>{product.name}</h4>
-                    <span style={{ color: 'var(--emerald-primary)', fontWeight: 'bold' }}>${product.price.toFixed(2)}</span>
+                    <span style={{ color: 'var(--emerald-primary)', fontWeight: 'bold' }}>₹{product.price.toFixed(2)}</span>
                   </div>
                   <button className="btn-primary" style={{ padding: '6px 14px', fontSize: '0.85rem' }} onClick={() => { addToCart(product); toggleWishlist(product.id); }}>
                     Move to Cart
@@ -1392,8 +1806,8 @@ function App() {
                   <span className="product-category">{activeProduct.category}</span>
                   <h2 style={{ fontSize: '1.6rem', margin: '8px 0' }}>{activeProduct.name}</h2>
                   <div className="product-price" style={{ margin: '12px 0' }}>
-                    <span className="current-price" style={{ fontSize: '1.5rem' }}>${activeProduct.price.toFixed(2)}</span>
-                    {activeProduct.originalPrice && <span className="original-price">${activeProduct.originalPrice.toFixed(2)}</span>}
+                    <span className="current-price" style={{ fontSize: '1.5rem' }}>₹{activeProduct.price.toFixed(2)}</span>
+                    {activeProduct.originalPrice && <span className="original-price">₹{activeProduct.originalPrice.toFixed(2)}</span>}
                   </div>
 
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.92rem', marginBottom: '20px' }}>
@@ -1438,7 +1852,7 @@ function App() {
 
                   <div style={{ display: 'flex', gap: '16px', marginTop: '24px' }}>
                     <button className="btn-primary" style={{ flex: 1 }} onClick={() => { addToCart(activeProduct, selectedColor, selectedSize, detailQty); setActiveProduct(null); }}>
-                      Add to Cart — ${(activeProduct.price * detailQty).toFixed(2)}
+                      Add to Cart — ₹{(activeProduct.price * detailQty).toFixed(2)}
                     </button>
                   </div>
                 </div>
@@ -1559,7 +1973,7 @@ function App() {
                   <h3 style={{ fontSize: '1.1rem', marginBottom: '16px', color: 'var(--text-gold)' }}>Step 2: Secure Payment Options</h3>
 
                   <div style={{ background: 'var(--bg-primary)', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
-                    <div className="summary-row"><span>Total Payable:</span><strong>${grandTotal.toFixed(2)}</strong></div>
+                    <div className="summary-row"><span>Total Payable:</span><strong>₹{grandTotal.toFixed(2)}</strong></div>
                     <div className="summary-row"><span>Ship To:</span><span>{shippingInfo.fullName}, {shippingInfo.city}</span></div>
                   </div>
 
@@ -1602,12 +2016,12 @@ function App() {
                     {lastOrder.items.map((item, i) => (
                       <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.88rem', marginBottom: '4px' }}>
                         <span>{item.quantity}x {item.name} ({item.color})</span>
-                        <span>${(item.price * item.quantity).toFixed(2)}</span>
+                        <span>₹{(item.price * item.quantity).toFixed(2)}</span>
                       </div>
                     ))}
                     <div style={{ borderTop: '1px solid var(--border-color)', marginTop: '8px', paddingTop: '8px', fontWeight: 'bold', display: 'flex', justifyContent: 'space-between' }}>
                       <span>Total Paid</span>
-                      <span>${lastOrder.total.toFixed(2)}</span>
+                      <span>₹{lastOrder.total.toFixed(2)}</span>
                     </div>
                   </div>
 
